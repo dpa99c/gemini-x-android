@@ -2,7 +2,11 @@
 
 package uk.co.workingedge.gemini.x.lib
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
+import android.provider.MediaStore
+import android.util.Base64
 import com.google.ai.client.generativeai.Chat
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.BlobPart
@@ -21,6 +25,8 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import java.io.ByteArrayOutputStream
 
 interface HistoryPart{
     val type: String
@@ -49,6 +55,9 @@ class GeminiX {
         private var generativeModel: GenerativeModel? = null
         private var chat: Chat? = null
 
+        /***********************************************************************
+         * Gemini SDK functions
+         **********************************************************************/
         fun init(
             modelName: String,
             apiKey: String,
@@ -67,15 +76,13 @@ class GeminiX {
                 }
             }
             val thisSafetySettings: List<SafetySetting> = listOf()
-            if(safetySettings != null) {
-                safetySettings.forEach { (key, value) ->
-                    when (key) {
-                        "HARASSMENT" -> thisSafetySettings.plus(SafetySetting(HarmCategory.HARASSMENT, getHarmLevel(value)))
-                        "HATE_SPEECH" -> thisSafetySettings.plus(SafetySetting(HarmCategory.HATE_SPEECH, getHarmLevel(value)))
-                        "SEXUALLY_EXPLICIT" -> thisSafetySettings.plus(SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, getHarmLevel(value)))
-                        "DANGEROUS_CONTENT" -> thisSafetySettings.plus(SafetySetting(HarmCategory.DANGEROUS_CONTENT, getHarmLevel(value)))
-                        "UNSPECIFIED" -> thisSafetySettings.plus(SafetySetting(HarmCategory.UNKNOWN, getHarmLevel(value)))
-                    }
+            safetySettings?.forEach { (key, value) ->
+                when (key) {
+                    "HARASSMENT" -> thisSafetySettings.plus(SafetySetting(HarmCategory.HARASSMENT, getHarmLevel(value)))
+                    "HATE_SPEECH" -> thisSafetySettings.plus(SafetySetting(HarmCategory.HATE_SPEECH, getHarmLevel(value)))
+                    "SEXUALLY_EXPLICIT" -> thisSafetySettings.plus(SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, getHarmLevel(value)))
+                    "DANGEROUS_CONTENT" -> thisSafetySettings.plus(SafetySetting(HarmCategory.DANGEROUS_CONTENT, getHarmLevel(value)))
+                    "UNSPECIFIED" -> thisSafetySettings.plus(SafetySetting(HarmCategory.UNKNOWN, getHarmLevel(value)))
                 }
             }
 
@@ -183,18 +190,20 @@ class GeminiX {
                         val role = if (item.isUser) "user" else "model"
                         var parts:List<Part> = mutableListOf()
                         item.parts.forEach { part ->
-                            val contentPart:Part
-                            when (part.type) {
+                            val contentPart:Part = when (part.type) {
                                 "text" -> {
-                                    contentPart = TextPart(part.content as String)
+                                    TextPart(part.content as String)
                                 }
+
                                 "image" -> {
-                                    contentPart = ImagePart(part.content as Bitmap)
+                                    ImagePart(part.content as Bitmap)
                                 }
+
                                 "blob" -> {
                                     val blobPart = part.content as BlobHistoryPart
-                                    contentPart = BlobPart(blobPart.mimeType, blobPart.content)
+                                    BlobPart(blobPart.mimeType, blobPart.content)
                                 }
+
                                 else -> {
                                     throw Exception("Unknown history part type: ${part.type}")
                                 }
@@ -326,17 +335,19 @@ class GeminiX {
                 val isUser = content.role == "user"
                 var parts:List<HistoryPart> = listOf()
                 content.parts.forEach { part ->
-                    val historyPart:HistoryPart
-                    when (part) {
+                    val historyPart:HistoryPart = when (part) {
                         is TextPart -> {
-                            historyPart = TextHistoryPart(part.text)
+                            TextHistoryPart(part.text)
                         }
+
                         is ImagePart -> {
-                            historyPart = ImageHistoryPart(part.image)
+                            ImageHistoryPart(part.image)
                         }
+
                         is BlobPart -> {
-                            historyPart = BlobHistoryPart(part.blob, part.mimeType)
+                            BlobHistoryPart(part.blob, part.mimeType)
                         }
+
                         else -> {
                             throw Exception("Unknown history part type: ${part::class.java}")
                         }
@@ -346,6 +357,33 @@ class GeminiX {
                 historyItems = historyItems.plus(HistoryItem(parts, isUser))
             }
             successCallback(historyItems)
+        }
+
+        /***********************************************************************
+         * Helper functions
+         **********************************************************************/
+        fun getBitmapsForUris(imageUris: JSONArray, context: Context): List<Bitmap> {
+            val images = mutableListOf<Bitmap>()
+            for (i in 0 until imageUris.length()) {
+                val uri = imageUris.getString(i)
+                val bitmap = getBitmapFromUri(uri, context)
+                images.add(bitmap)
+            }
+            return images
+        }
+
+        fun getBitmapFromUri(uri: String, context: Context): Bitmap {
+            return MediaStore.Images.Media.getBitmap(
+                context.contentResolver,
+                Uri.parse(uri)
+            )
+        }
+
+        fun bitmapToBase64(bitmap: Bitmap): String {
+            val baos = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+            val bytes = baos.toByteArray()
+            return Base64.encodeToString(bytes, Base64.DEFAULT)
         }
 
 
