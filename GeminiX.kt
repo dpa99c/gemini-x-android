@@ -5,6 +5,7 @@ package uk.co.workingedge.gemini.x.lib
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.provider.ContactsContract.CommonDataKinds.Im
 import android.provider.MediaStore
 import android.util.Base64
 import com.google.ai.client.generativeai.Chat
@@ -26,7 +27,13 @@ import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+
+interface Image{
+    val data: Bitmap
+    val mimeType: String? get() = null
+}
 
 interface HistoryPart{
     val type: String
@@ -38,7 +45,7 @@ class TextHistoryPart(override val content: String): HistoryPart {
         get() = "text"
 }
 
-class ImageHistoryPart(override val content: Bitmap): HistoryPart {
+class ImageHistoryPart(override val content: Bitmap, val mimeType: String? = null): HistoryPart {
     override val type: String
         get() = "image"
 }
@@ -93,31 +100,31 @@ class GeminiX {
             successCallback: (String, Boolean) -> Unit,
             errorCallback: (String) -> Unit,
             inputText: String,
-            images: List<Bitmap>? = null,
+            images: List<Image>? = null,
             streamResponse: Boolean? = false,
         ) {
             if(generativeModel == null) {
                 errorCallback("Model not initialized")
                 return
             }
-            val inputContent = content {
-                role = "user"
-                for (image in images ?: listOf()) {
-                    image(image)
-                }
-                text(inputText)
-            }
+            val inputContent = buildUserInputContent(inputText, images)
 
             GlobalScope.launch(Dispatchers.IO) {
                 if(streamResponse == true){
                     try {
+                        var fullResponse = ""
                         generativeModel?.generateContentStream(inputContent)?.onCompletion {
                             withContext(Dispatchers.Main) {
-                                successCallback("", true)
+                                if(fullResponse != ""){
+                                    successCallback(fullResponse, true)
+                                }
                             }
                         }?.collect { chunk ->
                             withContext(Dispatchers.Main) {
-                                chunk.text?.let { successCallback(it, false) }
+                                chunk.text?.let {
+                                    fullResponse += it
+                                    successCallback(it, false)
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -134,7 +141,7 @@ class GeminiX {
 
                     withContext(Dispatchers.Main) {
                         if (response != null) {
-                            response.text?.let { successCallback(it, false) }
+                            response.text?.let { successCallback(it, true) }
                         }
                     }
                 }
@@ -145,20 +152,14 @@ class GeminiX {
             successCallback: (Int) -> Unit,
             errorCallback: (String) -> Unit,
             inputText: String,
-            images: List<Bitmap>? = null,
+            images: List<Image>? = null,
         ) {
             if(generativeModel == null) {
                 errorCallback("Model not initialized")
                 return
             }
 
-            val inputContent = content {
-                role = "user"
-                for (image in images ?: listOf()) {
-                    image(image)
-                }
-                text(inputText)
-            }
+            val inputContent = buildUserInputContent(inputText, images)
 
             GlobalScope.launch(Dispatchers.IO) {
                 val response = try {
@@ -200,7 +201,7 @@ class GeminiX {
                                 }
 
                                 "blob" -> {
-                                    val blobPart = part.content as BlobHistoryPart
+                                    val blobPart = part as BlobHistoryPart
                                     BlobPart(blobPart.mimeType, blobPart.content)
                                 }
 
@@ -228,7 +229,7 @@ class GeminiX {
             successCallback: (String, Boolean) -> Unit,
             errorCallback: (String) -> Unit,
             inputText: String,
-            images: List<Bitmap>? = null,
+            images: List<Image>? = null,
             streamResponse: Boolean? = false,
         ) {
             if(generativeModel == null) {
@@ -240,24 +241,24 @@ class GeminiX {
                 return
             }
 
-            val inputContent = content {
-                role = "user"
-                for (image in images ?: listOf()) {
-                    image(image)
-                }
-                text(inputText)
-            }
+            val inputContent = buildUserInputContent(inputText, images)
 
             GlobalScope.launch(Dispatchers.IO) {
                 if(streamResponse == true){
                     try {
+                        var finalResponse = ""
                         chat?.sendMessageStream(inputContent)?.onCompletion {
                             withContext(Dispatchers.Main) {
-                                successCallback("", true)
+                                if(finalResponse != ""){
+                                    successCallback(finalResponse, true)
+                                }
                             }
                         }?.collect { chunk ->
                             withContext(Dispatchers.Main) {
-                                chunk.text?.let { successCallback(it, false) }
+                                chunk.text?.let {
+                                    finalResponse += it
+                                    successCallback(it, false)
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -284,7 +285,7 @@ class GeminiX {
             successCallback: (Int) -> Unit,
             errorCallback: (String) -> Unit,
             inputText: String? = null,
-            images: List<Bitmap>? = null,
+            images: List<Image>? = null,
         ) {
             if(generativeModel == null) {
                 errorCallback("Model not initialized")
@@ -298,13 +299,9 @@ class GeminiX {
             GlobalScope.launch(Dispatchers.IO) {
                 val response = try {
                     val history = chat?.history
-                    for (image in images ?: listOf()) {
-                        history?.add(Content("user", listOf(ImagePart(image))))
-                    }
-                    if (inputText != null) {
-                        history?.add(Content("user", listOf(TextPart(inputText))))
-                    }
-                    history?.let { generativeModel?.countTokens(*it.toTypedArray()) }
+                    val userInput = buildUserInputContent(inputText, images)
+                    val fullHistory = history?.plus(userInput)
+                    fullHistory?.let { generativeModel?.countTokens(*it.toTypedArray()) }
                 } catch (e: Exception) {
                     e.message?.let { errorCallback(it) }
                     null
@@ -362,14 +359,23 @@ class GeminiX {
         /***********************************************************************
          * Helper functions
          **********************************************************************/
-        fun getBitmapsForUris(imageUris: JSONArray, context: Context): List<Bitmap> {
-            val images = mutableListOf<Bitmap>()
-            for (i in 0 until imageUris.length()) {
-                val uri = imageUris.getString(i)
-                val bitmap = getBitmapFromUri(uri, context)
-                images.add(bitmap)
+        fun getModelImage(image: JSONObject, context: Context): Image {
+            val bitmap = getBitmapFromUri(image.getString("uri"), context)
+            return object : Image {
+                override val data: Bitmap
+                    get() = bitmap
+                override val mimeType: String?
+                    get() = image.getString("mimeType")
             }
-            return images
+        }
+
+        fun getModelImages(images: JSONArray, context: Context): List<Image> {
+            val modelImages = mutableListOf<Image>()
+            for (i in 0 until images.length()) {
+                val image = getModelImage(images.getJSONObject(i), context)
+                modelImages.add(image)
+            }
+            return modelImages
         }
 
         fun getBitmapFromUri(uri: String, context: Context): Bitmap {
@@ -379,11 +385,32 @@ class GeminiX {
             )
         }
 
-        fun bitmapToBase64(bitmap: Bitmap): String {
+        fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
             val baos = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
-            val bytes = baos.toByteArray()
+            return baos.toByteArray()
+        }
+
+        fun bitmapToBase64(bitmap: Bitmap): String {
+            val bytes = bitmapToByteArray(bitmap)
             return Base64.encodeToString(bytes, Base64.DEFAULT)
+        }
+
+        fun buildUserInputContent(text: String? = null, images: List<Image>? = null): Content {
+            return content {
+                role = "user"
+                for (image in images ?: listOf()) {
+                    if(image.mimeType != null){
+                        val bytes = bitmapToByteArray(image.data)
+                        blob(image.mimeType!!, bytes)
+                    }else{
+                        image(image.data)
+                    }
+                }
+                if (text != null){
+                    text(text)
+                }
+            }
         }
 
 
