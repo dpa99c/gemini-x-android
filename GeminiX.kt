@@ -4,8 +4,8 @@ package uk.co.workingedge.gemini.x.lib
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Bitmap.CompressFormat
 import android.net.Uri
-import android.provider.ContactsContract.CommonDataKinds.Im
 import android.provider.MediaStore
 import android.util.Base64
 import com.google.ai.client.generativeai.Chat
@@ -361,11 +361,19 @@ class GeminiX {
          **********************************************************************/
         fun getModelImage(image: JSONObject, context: Context): Image {
             val bitmap = getBitmapFromUri(image.getString("uri"), context)
-            return object : Image {
-                override val data: Bitmap
-                    get() = bitmap
-                override val mimeType: String?
-                    get() = image.getString("mimeType")
+            if(image.has("mimeType")) {
+                val mimeType = image.getString("mimeType")
+                return object : Image {
+                    override val data: Bitmap
+                        get() = bitmap
+                    override val mimeType: String
+                        get() = mimeType
+                }
+            }else{
+                return object : Image {
+                    override val data: Bitmap
+                        get() = bitmap
+                }
             }
         }
 
@@ -385,14 +393,22 @@ class GeminiX {
             )
         }
 
-        fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
+        fun bitmapToWebpByteArray(bitmap: Bitmap): ByteArray {
             val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+
+            var compressFormat: CompressFormat
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                compressFormat = CompressFormat.WEBP_LOSSLESS;
+            }else{
+                @Suppress("DEPRECATION")
+                compressFormat = CompressFormat.WEBP;
+            }
+            bitmap.compress(compressFormat, 100, baos)
             return baos.toByteArray()
         }
 
         fun bitmapToBase64(bitmap: Bitmap): String {
-            val bytes = bitmapToByteArray(bitmap)
+            val bytes = bitmapToWebpByteArray(bitmap)
             return Base64.encodeToString(bytes, Base64.DEFAULT)
         }
 
@@ -401,7 +417,7 @@ class GeminiX {
                 role = "user"
                 for (image in images ?: listOf()) {
                     if(image.mimeType != null){
-                        val bytes = bitmapToByteArray(image.data)
+                        val bytes = bitmapToWebpByteArray(image.data)
                         blob(image.mimeType!!, bytes)
                     }else{
                         image(image.data)
