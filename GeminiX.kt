@@ -429,6 +429,11 @@ class GeminiX {
             }
         }
 
+        fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
+            val baos = ByteArrayOutputStream()
+            bitmap.compress(CompressFormat.WEBP, 100, baos)
+            return baos.toByteArray()
+        }
 
         /********************
          * Internal functions
@@ -441,12 +446,6 @@ class GeminiX {
                 "LOW_AND_ABOVE" -> BlockThreshold.LOW_AND_ABOVE
                 else -> BlockThreshold.UNSPECIFIED
             }
-        }
-
-        fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
-            val baos = ByteArrayOutputStream()
-            bitmap.compress(CompressFormat.WEBP, 100, baos)
-            return baos.toByteArray()
         }
     }
 }
